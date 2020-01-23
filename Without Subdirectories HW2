@@ -1,0 +1,279 @@
+/*Egemen CAGSIRLI
+CSE 344 System Programming HW 2*/
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <sys/file.h>
+#include <unistd.h>
+//shared file lock
+#define LOCK_SH 1
+#define LOCK_EX 2
+#define LOCK_NB 4
+//unlock the file
+#define LOCK_UN 8
+
+//I assigned an integer value to count process number
+int processNum=0;
+
+/*----control functions----*/
+/*The function that find the path is directory or not*/
+int isDirectory(char *path){	
+    struct stat s_buffer;
+    if(stat(path, &s_buffer) == -1)
+        return 0;
+    else
+        return S_ISDIR(s_buffer.st_mode);
+}
+
+/*The function that find the path is regular or not*/
+int isReg(char *path){
+    struct stat s_buffer;
+    if(stat(path, &s_buffer) == -1)
+        return 0;
+    else
+        return S_ISREG(s_buffer.st_mode);
+}
+/*The function that find the path is pipe or not*/
+int isPipe(char *path){
+	struct stat s_buffer;
+	if(stat(path, &s_buffer) == -1)
+		return 0;
+	else
+		return S_ISFIFO(s_buffer.st_mode);
+}
+
+/*The function that find the path is symbolic link or not*/
+int isLink(char *path){
+	struct stat s_buffer;
+	if(lstat(path, &s_buffer) == -1)
+		return 0;
+	else
+		return S_ISLNK(s_buffer.st_mode);
+}
+/*----control functions----*/
+
+/*----sizePathFun function----*/ 
+/*This function returns size. It is necessarily for this homework*/
+int sizepathfun(char *path){
+    struct stat s_buffer;
+    if(stat(path, &s_buffer) == -1){
+        perror("Wrong File Status!");
+        return -1;
+    }
+    //if directory return 0
+	else if(S_ISDIR(s_buffer.st_mode) > 0){
+        return 0;
+    }
+    //if regular return size
+    else if(S_ISREG(s_buffer.st_mode) > 0){
+        return s_buffer.st_size;
+    }
+}
+
+//I assigned false zMinus in global 
+//if -z will be written zMinus will be true
+_Bool zMinus=false;
+
+/*----postOrderApply function----*/
+//It is our base function, fork and traversing in files are here*/
+int postOrderApply(char *path, int pathfun(char* path1)) 
+{
+	//I opened the file that keep directories and sizes. 
+	//I take size from this file for 20 points bonus. I wish I get 20 points bonus :)
+	FILE* fd;
+	fd=fopen("161044101sizes.txt", "a+");
+	int sum=0;
+	int sumKB=0;
+
+	struct dirent *newPath; 
+	DIR *dPtr;
+	dPtr = opendir(path);
+	pid_t childPid;
+
+	if(isDirectory(path))
+	{
+		/*-----------------------------------------------------*/
+		if (dPtr == NULL) 
+		{
+		  perror("Failed to open directory");
+		  printf("\n");
+		  return -1;
+		}
+		/*-----------------------------------------------------*/
+	
+		char tempPath[4096];
+		strcpy(tempPath,path);
+		int count=0;
+		while((newPath = readdir(dPtr))!=NULL)
+		{	
+			  	if(strcmp(newPath->d_name, ".")!=0 && strcmp(newPath->d_name, "..")!=0)
+			  	{
+					strcat(path,"/");
+					strcat(path, newPath->d_name);
+		  			
+		  			if(isDirectory(path))
+		  			{
+			  			FILE* fs;
+			  			int tempValue=0;
+						//fork in here
+		  				childPid=fork();
+		  				if(childPid==0)
+		  				{
+		  				//recursive part of this function
+		  				tempValue+=postOrderApply(path,pathfun);
+						fs=fopen("countSize.txt", "w");
+						fprintf(fs, "%d", tempValue);
+						fclose(fs);
+
+		  				exit(0);
+		  				}
+		  				else
+		  					wait(NULL);
+
+						fs=fopen("countSize.txt", "r");
+						fscanf(fs, "%d\n", &tempValue);
+						fclose(fs);
+						sum+=tempValue;
+						//update tempValue as 0
+						tempValue=0;
+
+		  			}
+		  			else if(isReg(path) && (!isLink(path)) && (!isPipe(path)))
+		  			{
+						int tempValue=0;
+		  				tempValue=pathfun(path);
+		  				sum+=tempValue;
+		  			}
+		  			else if(isLink(path))
+		  			{
+						//if it is not a directory or regular and is special file, do this
+		  				printf("%d\tSpecial file %s \n",(int)getpid(),newPath->d_name  );
+		  			}
+		  			strcpy(path,tempPath);
+			  	}
+		}
+
+		/*Write to file total size*/
+		FILE* fs;
+		fs=fopen("countSize.txt", "w");
+		fprintf(fs, "%d\n", sum);
+		fclose(fs);
+		
+
+		/*Read file to add processNum value*/
+		FILE* fp;
+		fp=fopen("countProcess.txt", "r+");
+		fscanf(fp, "%d", &processNum);
+		fclose(fp);
+
+		//Increment processNum 
+		++processNum;
+
+		fp=fopen("countProcess.txt", "w+");
+		fprintf(fp, "%d", processNum);
+		fclose(fp);
+
+		/*File locking in here*/
+		int fileLock=fileno(fd);
+		flock(fileLock, LOCK_EX);
+		fprintf(fd, "%d\t%d \t%s\n" ,(int)getpid(), sum, path);
+		flock(fileLock,LOCK_UN);
+		fclose(fd);
+		printf("%d\t%d \t%s\n" ,(int)getpid(), sum, path);
+
+	}
+	
+	closedir(dPtr);
+	//if there is -z
+	if(!zMinus)
+		return 0;
+	return sum;
+}
+
+/*Usages in a function*/
+void usages() {
+	printf("\n\nUsage...:\n");
+	printf("./buNeDuFork \"pathname\" or buNeDuFork -z \"pathname\" \n");
+}
+
+void writeToFile(){
+	FILE * fResult;
+	fResult=fopen("countProcess.txt", "r+");
+	fscanf(fResult, "%d\n", &processNum);
+	fclose(fResult);
+	printf("%d child processes created. Main process is %d \n", processNum, getppid());
+}
+
+
+/*----main function----*/
+int main(int argc, char *argv[]){
+
+	/*I opened a file to count and keep process number*/
+	FILE* fp;
+	fp=fopen("countProcess.txt", "w+");
+	fprintf(fp, "%d", processNum);
+	fclose(fp);
+
+	/*I opened a file to count and keep size*/
+	FILE* fs;
+	fs=fopen("countSize.txt", "w+");
+	fprintf(fs, "%d\n", 0);
+	fclose(fs);
+
+	/*This is the output that will be on the terminal*/
+	FILE* fd;
+	fd=fopen("161044101sizes.txt", "w+");
+	fprintf(fd, "PID\tSIZE\tPATH \n");
+	fclose(fd);
+
+	if(argc==2){
+			if(fork()==0){
+  				printf("PID\tSIZE\tPATH \n");
+				postOrderApply(argv[1], sizepathfun);
+				writeToFile();
+				exit(0);
+			}
+			else{
+				wait(NULL);
+			}
+	}
+	else if(argc==3){
+		/*if(strcmp(argv[1], "buNeDuFork") != 0)
+			printf("Usage: ./execfile buNeDuFork -z PATH or PATH\n");*/
+		if(strcmp(argv[1], "-z")!=0){
+			usages();
+			return EXIT_FAILURE;
+		}
+		else{
+			zMinus=true;
+			if(fork()==0){
+  				printf("PID\tSIZE\tPATH \n");
+				postOrderApply(argv[2], sizepathfun);
+				writeToFile();
+				exit(0);
+			}
+			else{
+				wait(NULL);
+			}
+		}
+	}
+	else
+		{
+			usages();
+			return EXIT_FAILURE;
+		}
+		    return EXIT_SUCCESS;	
+
+  	/*fd=fopen("161044101sizes.txt", "a+");
+  	fprintf(fd, "%d child process created. Main process is %d \n", processNum, getppid());
+	fclose(fd);*/
+
+}
+
